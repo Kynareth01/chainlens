@@ -12,6 +12,11 @@ from chainlens.config import ChainLensConfig
 
 logger = logging.getLogger("chainlens.monitor")
 
+# Reconnection settings
+RECONNECT_BASE_DELAY = 2.0   # seconds
+RECONNECT_MAX_DELAY = 60.0   # seconds
+RECONNECT_BACKOFF_FACTOR = 2.0
+
 
 class BlockMonitor:
     """Monitors new EVM blocks via WebSocket subscription or HTTP polling."""
@@ -21,6 +26,7 @@ class BlockMonitor:
         self._running = False
         self._callbacks: list[Callable] = []
         self._session: Optional[aiohttp.ClientSession] = None
+        self._reconnect_delay = RECONNECT_BASE_DELAY
 
     def on_block(self, callback: Callable):
         """Register a callback for new blocks."""
@@ -37,9 +43,26 @@ class BlockMonitor:
             except Exception as exc:
                 logger.error("Callback error: %s", exc)
 
+    def _reset_reconnect_delay(self):
+        """Reset backoff on successful connection."""
+        self._reconnect_delay = RECONNECT_BASE_DELAY
+
+    def _bump_reconnect_delay(self):
+        """Exponential backoff with cap."""
+        self._reconnect_delay = min(
+            self._reconnect_delay * RECONNECT_BACKOFF_FACTOR,
+            RECONNECT_MAX_DELAY,
+        )
+
+    async def _ensure_session(self):
+        """Re-create session if it was closed or doesn't exist."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+
     # ── Polling mode ──────────────────────────────────────────────
 
     async def _fetch_block(self, block_num: str = "latest") -> dict:
+        await self._ensure_session()
         payload = {
             "jsonrpc": "2.0",
             "method": "eth_getBlockByNumber",
@@ -60,10 +83,17 @@ class BlockMonitor:
                     last_block = block_num
                     logger.info("New block #%d (%d txs)", block_num, len(block.get("transactions", [])))
                     await self._notify(block)
+                    self._reset_reconnect_delay()
                 await asyncio.sleep(self.config.poll_interval)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                logger.warning("RPC connection error: %s — reconnecting in %.1fs", exc, self._reconnect_delay)
+                self._bump_reconnect_delay()
+                await self._ensure_session()
+                await asyncio.sleep(self._reconnect_delay)
             except Exception as exc:
-                logger.warning("Poll error: %s — retrying in 5s", exc)
-                await asyncio.sleep(5)
+                logger.warning("Poll error: %s — retrying in %.1fs", exc, self._reconnect_delay)
+                self._bump_reconnect_delay()
+                await asyncio.sleep(self._reconnect_delay)
 
     # ── WebSocket mode ────────────────────────────────────────────
 
@@ -71,7 +101,13 @@ class BlockMonitor:
         ws_url = self.config.ws_url or self.config.rpc_url.replace("https", "wss")
         while self._running:
             try:
-                async with self._session.ws_connect(ws_url) as ws:
+                await self._ensure_session()
+                async with self._session.ws_connect(
+                    ws_url,
+                    heartbeat=30,
+                    timeout=aiohttp.ClientWSTimeout(ws_close=10),
+                ) as ws:
+                    self._reset_reconnect_delay()
                     sub_msg = json.dumps({
                         "jsonrpc": "2.0",
                         "id": 1,
@@ -89,12 +125,18 @@ class BlockMonitor:
                             result = data.get("params", {}).get("result", {})
                             if result:
                                 await self._notify(result)
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            logger.error("WS error: %s", ws.exception())
+                        elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
+                            logger.warning("WS closed/error (type=%s)", msg.type)
                             break
+
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                logger.warning("WS connection error: %s — reconnecting in %.1fs", exc, self._reconnect_delay)
+                self._bump_reconnect_delay()
+                await asyncio.sleep(self._reconnect_delay)
             except Exception as exc:
-                logger.warning("WS connection lost: %s — reconnecting in 5s", exc)
-                await asyncio.sleep(5)
+                logger.error("Unexpected WS error: %s — reconnecting in %.1fs", exc, self._reconnect_delay)
+                self._bump_reconnect_delay()
+                await asyncio.sleep(self._reconnect_delay)
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -105,7 +147,7 @@ class BlockMonitor:
             for i in issues:
                 logger.warning("Config: %s", i)
 
-        self._session = aiohttp.ClientSession()
+        await self._ensure_session()
         self._running = True
 
         if mode == "auto":
@@ -119,7 +161,7 @@ class BlockMonitor:
 
     async def stop(self):
         self._running = False
-        if self._session:
+        if self._session and not self._session.closed:
             await self._session.close()
         logger.info("Block monitor stopped")
 
