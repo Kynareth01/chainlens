@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "chainlens"
+version = "0.1.0"
+description = "EVM blockchain monitoring agent — whale tracking, contract audits, rug detection, trading signals"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "Kynareth01"},
+]
+keywords = ["blockchain", "evm", "ethereum", "monitoring", "whale", "defi", "trading"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+dashboard = [
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "ruff>=0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/Kynareth01/chainlens"
+Repository = "https://github.com/Kynareth01/chainlens"
+Issues = "https://github.com/Kynareth01/chainlens/issues"
+
+[tool.setuptools.packages.find]
+include = ["chainlens*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

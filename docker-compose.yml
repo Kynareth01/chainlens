@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  chainlens-dashboard:
+    build: .
+    container_name: chainlens-dashboard
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  chainlens-monitor:
+    build: .
+    container_name: chainlens-monitor
+    command: >
+      python -c "
+      import asyncio
+      from chainlens import BlockMonitor, ChainLensConfig
+      config = ChainLensConfig.from_env()
+      monitor = BlockMonitor(config)
+
+      @monitor.on_block
+      async def on_block(block):
+          n = int(block.get('number', '0x0'), 16)
+          txs = len(block.get('transactions', []))
+          print(f'Block #{n} — {txs} txs')
+
+      asyncio.run(monitor.start())
+      "
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  chainlens-data:
