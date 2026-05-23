@@ -96,3 +96,8 @@ MIT — do whatever you want with it. If it saves you from a rug, buy me a coffe
 ## Contributing
 
 PRs welcome. Open an issue first for big changes.
+
+
+## Changelog
+
+- v0.1.0 — Initial release
